@@ -226,9 +226,16 @@ def upload_to_youtube(title, description):
     youtube = build('youtube', 'v3', credentials=creds)
     
     body = {
-        'snippet': {'title': title, 'description': description, 'categoryId': '1","title":"Film & Animation'}, # Category 1 is Film & Animation
-        'status': {'privacyStatus': 'public', 'selfDeclaredMadeForKids': False} # Set True if targeting kids
+    'snippet': {
+        'title': title, 
+        'description': description, 
+        'categoryId': '1'  # 1 = Film & Animation
+    },
+    'status': {
+        'privacyStatus': 'public', 
+        'selfDeclaredMadeForKids': True
     }
+}
     
     media = MediaFileUpload('final_short.mp4', chunksize=-1, resumable=True)
     youtube.videos().insert(part='snippet,status', body=body, media_body=media).execute()
