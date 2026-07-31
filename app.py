@@ -233,7 +233,7 @@ def upload_to_youtube(title, description):
     },
     'status': {
         'privacyStatus': 'public', 
-        'selfDeclaredMadeForKids': True
+        'selfDeclaredMadeForKids': False
     }
 }
     
