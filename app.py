@@ -115,8 +115,9 @@
 #         upload_to_youtube(title, description)
 #     else:
 #         print("No new videos found to process.")
-
-import os, sqlite3, ffmpeg
+import os
+import sqlite3
+import ffmpeg
 from yt_dlp import YoutubeDL
 from groq import Groq
 from google.oauth2.credentials import Credentials
@@ -131,19 +132,43 @@ def fetch_video():
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS posted (id TEXT PRIMARY KEY)")
     
-    ydl_opts = {'extract_flat': True, 'quiet': True}
-    with YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(TIKTOK_PROFILE_URL, download=False)
-        for entry in info.get('entries', []):
-            vid_id = entry['id']
-            if not cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,)).fetchone():
-                print(f"Downloading new video ID: {vid_id}")
-                dl_opts = {'outtmpl': 'input.mp4'}
-                YoutubeDL(dl_opts).download([entry['url']])
-                
-                cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
-                conn.commit()
-                return entry.get('title', '')
+    # Enabled 'impersonate' and custom User-Agent to pass TikTok anti-bot checks
+    ydl_opts = {
+        'extract_flat': True,
+        'quiet': True,
+        'impersonate': 'chrome',
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        }
+    }
+    
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(TIKTOK_PROFILE_URL, download=False)
+            if not info or 'entries' not in info:
+                print("No videos found or TikTok blocked the extraction request.")
+                return None
+
+            for entry in info.get('entries', []):
+                vid_id = entry.get('id')
+                if not vid_id:
+                    continue
+                    
+                if not cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,)).fetchone():
+                    print(f"Downloading new video ID: {vid_id}")
+                    dl_opts = {
+                        'outtmpl': 'input.mp4',
+                        'impersonate': 'chrome'
+                    }
+                    YoutubeDL(dl_opts).download([entry.get('url') or entry.get('webpage_url')])
+                    
+                    cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
+                    conn.commit()
+                    return entry.get('title', '')
+    except Exception as e:
+        print(f"Extraction failed: {e}")
+        return None
+        
     return None
 
 # 2. EDIT VIDEO & RETAIN ORIGINAL AUDIO (FFMPEG)
@@ -226,16 +251,16 @@ def upload_to_youtube(title, description):
     youtube = build('youtube', 'v3', credentials=creds)
     
     body = {
-    'snippet': {
-        'title': title, 
-        'description': description, 
-        'categoryId': '1'  # 1 = Film & Animation
-    },
-    'status': {
-        'privacyStatus': 'public', 
-        'selfDeclaredMadeForKids': False
+        'snippet': {
+            'title': title, 
+            'description': description, 
+            'categoryId': '1'  # 1 = Film & Animation
+        },
+        'status': {
+            'privacyStatus': 'public', 
+            'selfDeclaredMadeForKids': False
+        }
     }
-}
     
     media = MediaFileUpload('final_short.mp4', chunksize=-1, resumable=True)
     youtube.videos().insert(part='snippet,status', body=body, media_body=media).execute()
@@ -254,4 +279,4 @@ if __name__ == "__main__":
         print("3. Uploading to YouTube...")
         upload_to_youtube(title, description)
     else:
-        print("No new videos found to process.")
+        print("No new videos found to process or extraction failed.")
