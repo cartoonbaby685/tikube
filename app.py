@@ -129,14 +129,17 @@ TIKTOK_PROFILE_URL = os.getenv("TIKTOK_PROFILE_URL")
 
 # 1. DOWNLOAD TIKTOK & DE-DUPLICATE
 def fetch_video():
+    if not TIKTOK_PROFILE_URL:
+        print("ERROR: TIKTOK_PROFILE_URL environment variable is missing or empty!")
+        return None
+
     conn = sqlite3.connect('videos.db')
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS posted (id TEXT PRIMARY KEY)")
     
-    # Configure yt-dlp with anti-bot evasion & optional cookie support
     ydl_opts = {
         'extract_flat': True,
-        'quiet': False,  # Disabled quiet mode so full logs appear in CI/CD terminal
+        'quiet': False,
         'impersonate': 'chrome',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -144,7 +147,6 @@ def fetch_video():
         }
     }
 
-    # Use cookies.txt if it exists (Bypasses TikTok IP blocks on GitHub Actions)
     if os.path.exists('cookies.txt'):
         print("Using cookies.txt for authentication...")
         ydl_opts['cookiefile'] = 'cookies.txt'
@@ -156,6 +158,7 @@ def fetch_video():
             
             if not info or 'entries' not in info:
                 print("No entries found or request was blocked by TikTok.")
+                conn.close()
                 return None
 
             entries = list(info.get('entries', []))
@@ -169,7 +172,6 @@ def fetch_video():
                 if not vid_id:
                     continue
                     
-                # Check database if video was already processed
                 if not cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,)).fetchone():
                     print(f"Downloading new video ID: {vid_id}")
                     
@@ -186,17 +188,18 @@ def fetch_video():
                     
                     cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
                     conn.commit()
+                    conn.close()
                     return entry.get('title', '')
                     
     except Exception as e:
-        print("\n--- EXTRACTION FAILED (DETAILED ERROR BELOW) ---")
-        print(f"Exception Type: {type(e).__name__}")
-        print(f"Exception Details: {e}")
+        print(f"\n--- EXTRACTION ERROR: {e} ---")
         traceback.print_exc()
-        print("------------------------------------------------\n")
+        conn.close()
         return None
-        
+
+    conn.close()
     return None
+
 
 # 2. EDIT VIDEO & RETAIN ORIGINAL AUDIO (FFMPEG)
 def edit_video():
@@ -206,7 +209,6 @@ def edit_video():
 
     input_file = ffmpeg.input('input.mp4', t=max_duration)
 
-    # A. Visual Transformation Filter Chain
     video = (
         input_file.video
         .crop('iw*0.03', 'ih*0.03', 'iw*0.94', 'ih*0.94')
@@ -224,10 +226,7 @@ def edit_video():
         )
     )
 
-    # B. Retain Original Audio Stream directly
     audio = input_file.audio
-
-    # C. Render Final Output
     ffmpeg.output(video, audio, 'final_short.mp4', acodec='aac', vcodec='libx264').run(overwrite_output=True)
 
 # 3. GENERATE YOUTUBE SEO METADATA FOR BABY CARTOON (GROQ)
@@ -255,8 +254,15 @@ def generate_metadata(caption):
     )
     
     res = completion.choices[0].message.content
-    title = res.split("TITLE:")[1].split("DESCRIPTION:")[0].strip()[:95]
-    description = res.split("DESCRIPTION:")[1].strip()
+    
+    # Safe splitting in case LLM outputs unexpected headers
+    try:
+        title = res.split("TITLE:")[1].split("DESCRIPTION:")[0].strip()[:95]
+        description = res.split("DESCRIPTION:")[1].strip()
+    except IndexError:
+        print("Warning: LLM formatting did not match expected structure. Using fallback formatting.")
+        title = "Cute Baby Cartoon #shorts #funny #babycartoon"
+        description = res.strip()
     
     disclaimer = "\n\n---\nDisclaimer: Short entertaining baby cartoon video clips edited for audience enjoyment under Fair Use."
     return title, description + disclaimer
