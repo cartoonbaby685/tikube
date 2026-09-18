@@ -117,6 +117,7 @@
 #         print("No new videos found to process.")
 import os
 import sqlite3
+import traceback
 import ffmpeg
 from yt_dlp import YoutubeDL
 from groq import Groq
@@ -132,41 +133,67 @@ def fetch_video():
     cursor = conn.cursor()
     cursor.execute("CREATE TABLE IF NOT EXISTS posted (id TEXT PRIMARY KEY)")
     
-    # Enabled 'impersonate' and custom User-Agent to pass TikTok anti-bot checks
+    # Configure yt-dlp with anti-bot evasion & optional cookie support
     ydl_opts = {
         'extract_flat': True,
-        'quiet': True,
+        'quiet': False,  # Disabled quiet mode so full logs appear in CI/CD terminal
         'impersonate': 'chrome',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
         }
     }
+
+    # Use cookies.txt if it exists (Bypasses TikTok IP blocks on GitHub Actions)
+    if os.path.exists('cookies.txt'):
+        print("Using cookies.txt for authentication...")
+        ydl_opts['cookiefile'] = 'cookies.txt'
     
     try:
         with YoutubeDL(ydl_opts) as ydl:
+            print(f"Attempting to fetch profile: {TIKTOK_PROFILE_URL}")
             info = ydl.extract_info(TIKTOK_PROFILE_URL, download=False)
+            
             if not info or 'entries' not in info:
-                print("No videos found or TikTok blocked the extraction request.")
+                print("No entries found or request was blocked by TikTok.")
                 return None
 
-            for entry in info.get('entries', []):
+            entries = list(info.get('entries', []))
+            print(f"Found {len(entries)} videos in feed.")
+
+            for entry in entries:
+                if not entry:
+                    continue
+                
                 vid_id = entry.get('id')
                 if not vid_id:
                     continue
                     
+                # Check database if video was already processed
                 if not cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,)).fetchone():
                     print(f"Downloading new video ID: {vid_id}")
+                    
+                    video_url = entry.get('url') or entry.get('webpage_url') or f"https://www.tiktok.com/@/video/{vid_id}"
+                    
                     dl_opts = {
                         'outtmpl': 'input.mp4',
-                        'impersonate': 'chrome'
+                        'impersonate': 'chrome',
                     }
-                    YoutubeDL(dl_opts).download([entry.get('url') or entry.get('webpage_url')])
+                    if os.path.exists('cookies.txt'):
+                        dl_opts['cookiefile'] = 'cookies.txt'
+
+                    YoutubeDL(dl_opts).download([video_url])
                     
                     cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
                     conn.commit()
                     return entry.get('title', '')
+                    
     except Exception as e:
-        print(f"Extraction failed: {e}")
+        print("\n--- EXTRACTION FAILED (DETAILED ERROR BELOW) ---")
+        print(f"Exception Type: {type(e).__name__}")
+        print(f"Exception Details: {e}")
+        traceback.print_exc()
+        print("------------------------------------------------\n")
         return None
         
     return None
@@ -180,10 +207,6 @@ def edit_video():
     input_file = ffmpeg.input('input.mp4', t=max_duration)
 
     # A. Visual Transformation Filter Chain
-    # - 3% Crop
-    # - Scale to 1080x1920
-    # - Contrast 1.04, Brightness 0.01
-    # - Draw Bottom Banner "Follow for daily cartoon"
     video = (
         input_file.video
         .crop('iw*0.03', 'ih*0.03', 'iw*0.94', 'ih*0.94')
@@ -235,7 +258,6 @@ def generate_metadata(caption):
     title = res.split("TITLE:")[1].split("DESCRIPTION:")[0].strip()[:95]
     description = res.split("DESCRIPTION:")[1].strip()
     
-    # Add Disclaimer to Description
     disclaimer = "\n\n---\nDisclaimer: Short entertaining baby cartoon video clips edited for audience enjoyment under Fair Use."
     return title, description + disclaimer
 
