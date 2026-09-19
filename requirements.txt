@@ -1,4 +1,4 @@
-yt-dlp
+yt-dlp[curl-cffi]
 curl_cffi
 ffmpeg-python
 groq
