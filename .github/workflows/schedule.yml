@@ -42,3 +42,10 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
         run: python app.py
+
+      - name: Save Database Cache
+        if: always()
+        uses: actions/cache/save@v3
+        with:
+          path: videos.db
+          key: videos-db-${{ github.run_id }}
