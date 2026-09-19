@@ -1,4 +1,4 @@
-
+import sys
 import os
 import sqlite3
 import traceback
@@ -6,16 +6,16 @@ import ffmpeg
 from yt_dlp import YoutubeDL
 from groq import Groq
 from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
-from google.auth.transport.requests import Request
 
 TIKTOK_PROFILE_URL = os.getenv("TIKTOK_PROFILE_URL")
 
-# 1. DOWNLOAD TIKTOK & DE-DUPLICATE
 def fetch_video():
+    print(f"Starting fetch_video()...", flush=True)
     if not TIKTOK_PROFILE_URL:
-        print("ERROR: TIKTOK_PROFILE_URL environment variable is missing or empty!")
+        print("ERROR: TIKTOK_PROFILE_URL environment variable is missing or empty!", flush=True)
         return None
 
     conn = sqlite3.connect('videos.db')
@@ -25,6 +25,7 @@ def fetch_video():
     ydl_opts = {
         'extract_flat': True,
         'quiet': False,
+        'no_warnings': False,
         'impersonate': 'chrome',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -33,21 +34,28 @@ def fetch_video():
     }
 
     if os.path.exists('cookies.txt'):
-        print("Using cookies.txt for authentication...")
+        print("Using cookies.txt for authentication...", flush=True)
         ydl_opts['cookiefile'] = 'cookies.txt'
-    
+    else:
+        print("WARNING: cookies.txt not found. TikTok may block this request on GitHub Actions.", flush=True)
+
     try:
         with YoutubeDL(ydl_opts) as ydl:
-            print(f"Attempting to fetch profile: {TIKTOK_PROFILE_URL}")
+            print(f"Attempting to fetch profile: {TIKTOK_PROFILE_URL}", flush=True)
             info = ydl.extract_info(TIKTOK_PROFILE_URL, download=False)
             
-            if not info or 'entries' not in info:
-                print("No entries found or request was blocked by TikTok.")
+            if not info:
+                print("Extraction returned None.", flush=True)
                 conn.close()
                 return None
 
             entries = list(info.get('entries', []))
-            print(f"Found {len(entries)} videos in feed.")
+            print(f"Found {len(entries)} entries in feed.", flush=True)
+
+            if not entries:
+                print("No entries returned. TikTok blocked the request or account is empty.", flush=True)
+                conn.close()
+                return None
 
             for entry in entries:
                 if not entry:
@@ -56,33 +64,38 @@ def fetch_video():
                 vid_id = entry.get('id')
                 if not vid_id:
                     continue
-                    
-                if not cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,)).fetchone():
-                    print(f"Downloading new video ID: {vid_id}")
-                    
-                    video_url = entry.get('url') or entry.get('webpage_url') or f"https://www.tiktok.com/@/video/{vid_id}"
-                    
-                    dl_opts = {
-                        'outtmpl': 'input.mp4',
-                        'impersonate': 'chrome',
-                    }
-                    if os.path.exists('cookies.txt'):
-                        dl_opts['cookiefile'] = 'cookies.txt'
+                
+                # Check database
+                cursor.execute("SELECT 1 FROM posted WHERE id=?", (vid_id,))
+                if cursor.fetchone():
+                    print(f"Video {vid_id} already posted. Skipping...", flush=True)
+                    continue
 
-                    YoutubeDL(dl_opts).download([video_url])
-                    
-                    cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
-                    conn.commit()
-                    conn.close()
-                    return entry.get('title', '')
-                    
+                print(f"Downloading new video ID: {vid_id}", flush=True)
+                video_url = entry.get('url') or entry.get('webpage_url') or f"https://www.tiktok.com/@/video/{vid_id}"
+                
+                dl_opts = {
+                    'outtmpl': 'input.mp4',
+                    'impersonate': 'chrome',
+                }
+                if os.path.exists('cookies.txt'):
+                    dl_opts['cookiefile'] = 'cookies.txt'
+
+                YoutubeDL(dl_opts).download([video_url])
+                
+                cursor.execute("INSERT INTO posted VALUES (?)", (vid_id,))
+                conn.commit()
+                conn.close()
+                return entry.get('title', '')
+
     except Exception as e:
-        print(f"\n--- EXTRACTION ERROR: {e} ---")
+        print(f"\n--- EXTRACTION ERROR: {e} ---", flush=True)
         traceback.print_exc()
         conn.close()
         return None
 
     conn.close()
+    print("All existing videos have already been posted.", flush=True)
     return None
 
 
