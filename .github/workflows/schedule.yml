@@ -34,6 +34,10 @@ jobs:
       - name: Install Python Dependencies
         run: pip install -r requirements.txt
 
+      - name: Create cookies file
+        run: |
+          echo "${{ secrets.TIKTOK_COOKIES }}" > cookies.txt
+
       - name: Execute Automation Script
         env:
           PYTHONUNBUFFERED: "1"
